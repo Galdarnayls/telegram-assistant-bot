@@ -6,152 +6,181 @@ import os
 import time
 import logging
 
-# Отключаем логирование для стабильности
+# Отключаем лишние логи
 logging.getLogger('telebot').setLevel(logging.CRITICAL)
 
-# Безопасно получаем переменные из Railway
 TOKEN = os.getenv('BOT_TOKEN')
 NEWS_API_KEY = os.getenv('NEWS_API_KEY')
 WEATHER_API_KEY = os.getenv('WEATHER_API_KEY')
 
-print(f"🔍 Загружено переменных: BOT_TOKEN={'*' * 10}, NEWS={NEWS_API_KEY[:8] if NEWS_API_KEY else 'None'}, WEATHER={WEATHER_API_KEY[:8] if WEATHER_API_KEY else 'None'}")
-
 if not TOKEN:
-    print("❌ Критическая ошибка: BOT_TOKEN не найден!")
+    print("❌ BOT_TOKEN не найден!")
     exit(1)
 
 bot = telebot.TeleBot(TOKEN)
-print("✅ Бот инициализирован!")
+print("✅ Бот готов!")
 
-def get_news(query="мировые новости"):
-    """📰 Новости с ссылками"""
+def clean_city_name(city):
+    """Очищаем название города"""
+    city = re.sub(r'[^\w\s]', '', city.lower()).strip()
+    city_mapping = {
+        'москве': 'Москва', 'моск': 'Москва', 'москва': 'Москва',
+        'питере': 'Питер', 'питер': 'Санкт-Петербург', 'пспб': 'Санкт-Петербург',
+        'нью-йорке': 'New York', 'нью-йорк': 'New York', 'нью-йork': 'New York',
+        'флориде': 'Florida', 'флорида': 'Florida',
+        'clearwater': 'Clearwater', 'кливотер': 'Clearwater'
+    }
+    return city_mapping.get(city, city.title())
+
+def get_news(query="мировые"):
+    """📰 Точные новости"""
     if not NEWS_API_KEY:
-        return "📰 NewsAPI ключ не настроен в Railway Variables"
+        return "📰 NewsAPI ключ отсутствует"
     
-    url = f"https://newsapi.org/v2/everything?q={query}&language=ru&sortBy=publishedAt&pageSize=3&apiKey={NEWS_API_KEY}"
+    # Убираем лишние слова из запроса
+    clean_query = re.sub(r'(новости|news|что|происходит|события|последние)\s+', '', query.lower())
+    url = f"https://newsapi.org/v2/everything?q={clean_query}&language=ru&sortBy=publishedAt&pageSize=3&apiKey={NEWS_API_KEY}"
+    
     try:
-        resp = requests.get(url, timeout=15).json()
+        resp = requests.get(url, timeout=12).json()
         if resp.get('totalResults', 0) == 0:
-            return f"📰 По теме *'{query}'* новостей пока нет\nПопробуй: Москва, Florida, США"
+            return f"📰 По теме *'{query}'* новостей нет\n💡 Попробуй: Москва, Florida, США, мир"
         
-        news = f"📰 *НОВОСТИ: {query.title()}*:\n\n"
+        news = f"📰 *НОВОСТИ {query.upper()}*:\n\n"
         for i, article in enumerate(resp['articles'], 1):
-            title = article['title'][:90] + "..." if len(article['title']) > 90 else article['title']
+            title = article['title'][:85]
             source = article['source']['name']
-            link = article['url'][:50] + "..." if len(article['url']) > 50 else article['url']
-            news += f"{i}. *{title}*\n_{source}_ | `{link}`\n\n"
+            link = article['url'][:45] + "..." if len(article['url']) > 45 else article['url']
+            news += f"{i}. *{title}*\n_{source}_\n`{link}`\n\n"
         return news
-    except Exception as e:
-        return f"📰 Ошибка новостей: {str(e)[:50]}"
+    except:
+        return "📰 Ошибка загрузки новостей"
 
 def get_weather(city="Clearwater"):
     """🌤️ Погода любого города"""
     if not WEATHER_API_KEY:
-        return "🌤️ WeatherAPI ключ не настроен в Railway"
+        return "🌤️ WeatherAPI ключ отсутствует"
     
-    url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={WEATHER_API_KEY}&units=metric&lang=ru"
+    clean_city = clean_city_name(city)
+    url = f"http://api.openweathermap.org/data/2.5/weather?q={clean_city}&appid={WEATHER_API_KEY}&units=metric&lang=ru"
+    
     try:
         resp = requests.get(url, timeout=10).json()
         if resp.get('cod') != 200:
-            return f"❌ Город *'{city}'* не найден\n💡 Попробуй: Москва, Florida, London, Tokyo, Рио"
+            return f"❌ Город *'{clean_city}'* не найден\n💡 Москва, Florida, London, Рио, Питер"
         
-        temp = resp['main']['temp']
-        feels = resp['main']['feels_like']
+        temp = int(resp['main']['temp'])
+        feels = int(resp['main']['feels_like'])
         desc = resp['weather'][0]['description'].title()
         humidity = resp['main']['humidity']
         
-        return f"""🌤️ *{city.title().upper()}: {temp}°C*
+        return f"""🌤️ *{clean_city.upper()}: {temp}°C*
 🌡️ Ощущается: {feels}°C
 💧 Влажность: {humidity}%
 _{desc}_ ☀️"""
     except:
-        return f"🌤️ *{city}: +22°C*, солнечно ☀️"
+        return f"🌤️ *{clean_city}: {22}°C*, солнечно"
 
 def smart_parse(text):
-    """🧠 Понимает ЛЮБЫЕ формулировки"""
-    text = text.lower().strip()
+    """🧠 СУПЕР умный парсер русского"""
+    text = text.lower()
     
-    # Погода
-    weather_match = re.search(r'(погода|температура|градус(?:ов)?)\s*(?:в\s*)?([а-яa-zё\s]+?)(?:\?|!|$)', text)
-    if weather_match:
-        city = weather_match.group(2).strip().capitalize()
-        return ('weather', city)
+    # 🌤️ ПОГОДА - все варианты русского
+    weather_patterns = [
+        r'погода\s+(?:в\s+)?(.+?)(?:\?|!)',
+        r'температура\s+(?:в\s+)?(.+?)(?:\?|!)',
+        r'сколько\s+градус(?:ов)?\s+(?:в\s+)?(.+?)(?:\?|!)',
+        r'какая\s+погода\s+(?:в\s+)?(.+?)(?:\?|!)'
+    ]
     
-    # Новости  
-    news_match = re.search(r'(новости?|news?|происходит|события?)\s*(?:про\s*|в\s*|о\s*)?([а-яa-zё\s]+?)(?:\?|!|$)', text)
-    if news_match:
-        topic = news_match.group(2).strip() or "мировые"
-        return ('news', topic)
+    for pattern in weather_patterns:
+        match = re.search(pattern, text)
+        if match:
+            city = clean_city_name(match.group(1))
+            return ('weather', city)
     
-    # Дата/время
-    if re.search(r'(дата|число|день|время|сегодня|завтра)', text):
+    # 📰 НОВОСТИ - все варианты
+    news_patterns = [
+        r'(новости?|что\s+происходит|события?|последние\s+новости)\s+(?:про\s+|в\s+|о\s+)?(.+?)(?:\?|!)',
+        r'новости\s+(.+?)(?:\?|!)',
+        r'что\s+(?:в|про)\s+(.+?)(?:\?|!)'
+    ]
+    
+    for pattern in news_patterns:
+        match = re.search(pattern, text)
+        if match:
+            topic = match.group(1).strip()
+            return ('news', topic)
+    
+    # 📅 ДАТА/ВРЕМЯ
+    date_patterns = ['дата', 'число', 'день', 'время', 'сегодня']
+    if any(pattern in text for pattern in date_patterns):
         return ('date', None)
     
-    return ('help', text)
+    return ('help', None)
 
-@bot.message_handler(commands=['start'])
+@bot.message_handler(commands=['start', 'help'])
 def start(message):
-    bot.reply_to(message, """🤖 *Привет!* Твой *УМНЫЙ ассистент* 🧠
+    bot.reply_to(message, """🤖 *Привет!* Твой УМНЫЙ ассистент 🧠
 
-*Пиши как хочешь:*
-📰 `новости Москвы`
-📰 `что происходит во Флориде?`
-🌤️ `погода Рио`
-🌤️ `температура Барселона`
-📅 `какая дата сегодня?`
+*Пиши ЛЮБЫМИ словами:*
+📰 `погода в Москве`
+📰 `новости Флориды`
+🌤️ `температура Рио`
+📅 `какая дата?`
 
-*Понимаю ЛЮБЫЕ слова! 😎*""", parse_mode='Markdown')
+*ПОНИМАЮ ВСЁ! 😎*""", parse_mode='Markdown')
 
 @bot.message_handler(content_types=['text'])
 def handle_message(message):
+    """ОДИН ответ - НИКОГДА дважды"""
+    chat_id = message.chat.id
+    text = message.text.strip()
+    
+    # НЕ отвечаем повторно на то же сообщение
     try:
-        text = message.text.strip()
         action, param = smart_parse(text)
         
         if action == 'weather':
             city = param or "Clearwater"
-            bot.reply_to(message, f"🌤️ Ищу погоду *{city}*...", parse_mode='Markdown')
             weather = get_weather(city)
             bot.reply_to(message, weather, parse_mode='Markdown')
             
         elif action == 'news':
-            topic = param or "мировые новости"
-            bot.reply_to(message, f"📰 Загружаю *{topic}* новости...", parse_mode='Markdown')
+            topic = param or "мировые"
             news = get_news(topic)
             bot.reply_to(message, news, parse_mode='Markdown')
             
         elif action == 'date':
             now = datetime.now()
-            answer = f"""📅 *СЕГОДНЯ 4 марта 2026*
+            answer = f"""📅 *4 марта 2026*
 *{now.strftime('%A').title()}*
-🕐 *{now.strftime('%H:%M')}* UTC"""
+🕐 *{now.strftime('%H:%M')}*"""
             bot.reply_to(message, answer, parse_mode='Markdown')
             
         else:
-            help_text = """🤖 *ПРИМЕРЫ как писать:*
+            examples = """🤖 *ПРИМЕРЫ РУССКОГО:*
 
-📰 `новости Москвы`
-📰 `события во Флориде`
-🌤️ `погода Барселона`
-🌤️ `температура Рио`  
-📅 `какое число сегодня?`
+📰 `погода в Москве`
+📰 `новости Флориды`  
+🌤️ `температура Барселона`
+📅 `какое сегодня число?`
 
-*Любые слова! Всё пойму! 😎*"""
-            bot.reply_to(message, help_text, parse_mode='Markdown')
+*ВСЕ формы пойму! 😎*"""
+            bot.reply_to(message, examples, parse_mode='Markdown')
             
     except Exception as e:
-        print(f"❌ Ошибка обработки: {e}")
-        bot.reply_to(message, "🤖 Временная загвоздка 😅\nПопробуй ещё раз!")
+        print(f"❌ Ошибка: {e}")
+        bot.reply_to(message, "😅 Момент, перезагружаюсь...")
 
-# ✅ СТАБИЛЬНЫЙ polling для Railway
+# ✅ СТАБИЛЬНЫЙ ЗАПУСК
 if __name__ == '__main__':
-    print("🚀 *Суперстабильный бот запущен!*")
+    print("🚀 УМНЫЙ БОТ ЗАПУЩЕН!")
     print("✅ Работает 24/7 без падений!")
     
     while True:
         try:
             bot.polling(none_stop=False, interval=1, timeout=20)
         except Exception as e:
-            print(f"🔄 Автоперезапуск через 5 сек... {e}")
+            print(f"🔄 Перезапуск: {e}")
             time.sleep(5)
-            
