@@ -146,4 +146,12 @@ def handle_message(message):
         bot.reply_to(message, examples, parse_mode='Markdown')
 
 print("🧠 *Супер-умный бот готов!* 🌟")
-bot.polling(none_stop=True)
+if __name__ == '__main__':
+    print("🧠 *Бот стабильно запущен на Railway!* 🌟")
+    while True:
+        try:
+            bot.polling(none_stop=False, interval=1, timeout=20)
+        except Exception as e:
+            print(f"🔄 Перезапуск через 5 сек... {e}")
+            import time
+            time.sleep(5)
