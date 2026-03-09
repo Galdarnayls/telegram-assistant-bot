@@ -1,9 +1,11 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/my_bot.py b/my_bot.py
-index 8b137891791fe96927ad78e64b0aad7bded08bdc..8c810775a5617b762054ea1d3896e6404f26e43a 100644
+index 8b137891791fe96927ad78e64b0aad7bded08bdc..393fbe1dc06b54470a3aa087d95985e001a0d8cd 100644
 --- a/my_bot.py
 +++ b/my_bot.py
-@@ -1 +1,219 @@
+@@ -1 +1,251 @@
 +import os
++import threading
 +from typing import List, Optional
  
 +import requests
@@ -16,8 +18,11 @@ index 8b137891791fe96927ad78e64b0aad7bded08bdc..8c810775a5617b762054ea1d3896e640
 +
 +WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 +RAILWAY_PUBLIC_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN")
++RAILWAY_STATIC_URL = os.getenv("RAILWAY_STATIC_URL")
++RAILWAY_PUBLIC_URL = os.getenv("RAILWAY_PUBLIC_URL")
 +PORT = int(os.getenv("PORT", "8080"))
 +
++WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 +bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
 +app = Flask(__name__)
 +
@@ -194,24 +199,51 @@ index 8b137891791fe96927ad78e64b0aad7bded08bdc..8c810775a5617b762054ea1d3896e640
 +
 +@app.get("/")
 +def healthcheck():
-+    return {"status": "ok"}, 200
++    return {"status": "ok", "webhook_path": WEBHOOK_PATH}, 200
 +
 +
-+@app.post(f"/webhook/{BOT_TOKEN}")
++@app.post(WEBHOOK_PATH)
 +def telegram_webhook():
-+    if request.headers.get("content-type") == "application/json":
-+        update = telebot.types.Update.de_json(request.get_data().decode("utf-8"))
-+        bot.process_new_updates([update])
-+        return "", 200
-+    return "Unsupported Media Type", 415
++    content_type = request.headers.get("content-type", "")
++    if not content_type.startswith("application/json"):
++        return "Unsupported Media Type", 415
++
++    update = telebot.types.Update.de_json(request.get_data().decode("utf-8"))
++    bot.process_new_updates([update])
++    return "", 200
++
++
++def _normalize_base_url(url: str) -> str:
++    clean = url.strip().rstrip("/")
++    if clean.startswith("http://") or clean.startswith("https://"):
++        return clean
++    return f"https://{clean}"
 +
 +
 +def build_webhook_url() -> Optional[str]:
 +    if WEBHOOK_URL:
-+        return WEBHOOK_URL
-+    if RAILWAY_PUBLIC_DOMAIN:
-+        return f"https://{RAILWAY_PUBLIC_DOMAIN}/webhook/{BOT_TOKEN}"
-+    return None
++        base = _normalize_base_url(WEBHOOK_URL)
++    elif RAILWAY_PUBLIC_URL:
++        base = _normalize_base_url(RAILWAY_PUBLIC_URL)
++    elif RAILWAY_STATIC_URL:
++        base = _normalize_base_url(RAILWAY_STATIC_URL)
++    elif RAILWAY_PUBLIC_DOMAIN:
++        base = _normalize_base_url(RAILWAY_PUBLIC_DOMAIN)
++    else:
++        return None
++
++    if base.endswith(WEBHOOK_PATH):
++        return base
++    return f"{base}{WEBHOOK_PATH}"
++
++
++def start_polling_background() -> None:
++    polling_thread = threading.Thread(
++        target=bot.infinity_polling,
++        kwargs={"timeout": 30, "long_polling_timeout": 30},
++        daemon=True,
++    )
++    polling_thread.start()
 +
 +
 +if __name__ == "__main__":
@@ -219,6 +251,10 @@ index 8b137891791fe96927ad78e64b0aad7bded08bdc..8c810775a5617b762054ea1d3896e640
 +    if webhook_url:
 +        bot.remove_webhook()
 +        bot.set_webhook(url=webhook_url)
-+        app.run(host="0.0.0.0", port=PORT)
 +    else:
-+        bot.infinity_polling(timeout=30, long_polling_timeout=30)
++        start_polling_background()
++
++    app.run(host="0.0.0.0", port=PORT)
+ 
+EOF
+)
